@@ -1,0 +1,313 @@
+#!/usr/bin/env node
+
+const program = require('commander');
+const fs = require('fs');
+const fse = require('fs-extra');
+const path = require('path');
+const YAML = require('js-yaml');
+const camelcase = require('camelcase');
+const {spawn} = require('child_process');
+const crypto = require('crypto');
+const Module = require('module');
+const EventEmitter = require('events');
+
+require('colors');
+
+const {ensureRNRoot, loadBunkerConfig} = require('./.utils');
+
+
+const packageInfo = require('../package.json');
+
+program
+  .version(packageInfo.version)
+  .description('这个命令必须在 react-native 项目根目录下运行。')
+  .option('-d --dev [boolean]', '开发模式，开发模块，不打分包', 'true')
+  .option('-o --output [string]', '输出目录，默认使用 bunker.yaml 中的定义：bunker.dist')
+  .parse(process.argv);
+
+const __DEV__ = parseBoolean(program.dev);
+
+
+// 检查是否是 react-native 项目根目录
+const projRoot = ensureRNRoot(program.description());;
+
+/**
+ *  
+ */
+
+const apmConfig = loadBunkerConfig(projRoot);
+
+const outputDir = program.output ? path.resolve(program.output) : apmConfig.bunker.dist;
+const templateDir = path.resolve(__dirname, '../defaults');
+
+/**
+ *  生成 entry file
+ */
+try {
+  createEntryFile();
+}catch(e){
+  console.log('ERROR'.red, 'buld entry.js fail.');
+  return console.error(e);
+}
+
+
+
+/**
+ *  编译动态模块 __DEV__ == false
+ */
+
+if (!__DEV__) {
+  const tickTock = TickTock();
+  Promise.resolve(tickTock.begin)
+  .then(function () {
+    return apmConfig['dynamic-packages'].map(compilePackage);
+  }).then(function (tasks) {
+    return Promise.all(tasks);
+  }).then(function () {
+    tickTock.end;
+  }).catch(function (error) {
+    tickTock.end;
+    console.error(error)
+  });
+}
+
+/************************************************************************************************/
+
+function compilePackage(name) {
+
+  // 确认 dist 存在
+  fse.ensureDirSync(outputDir)
+  
+  const entry = findPackageEntry(name);
+
+  return Promise.resolve().then(function () {
+    return ['ios', 'android'].map(function (platform) {
+      const output = path.resolve(outputDir, `${name}.${platform}`);
+      return compilePackageImpl(entry, platform).then(function (script) {
+        /**
+         *  分包 开头加入 md5 校验
+         *  也可用来检查服务器上的内容是否有更新
+         */
+        script = ['/*', crypto.createHash('MD5').update(script).digest('HEX'), '*/', script].join('');
+        fs.writeFileSync(output, script);
+      })
+    });
+  }).then(function (tasks) {
+    return Promise.all(tasks)
+  }).catch(function (e) {
+    tickTock.end;
+    throw e;
+  });
+}
+
+/**
+ *  使用 child_process 在后台打包
+ */
+function compilePackageImpl(entry, platform) {
+  return bundlePackage(entry, platform).then(function (script) {
+
+    const modules = [];
+    const mainid = [];
+
+    new Function('__d', 'require', script).call({}, __d, require);
+
+    return modules.map(function ([factory, id]) {
+      return `__d(${factory.toString()}, ${id});`
+    }).concat(mainid.map(function (id, index) {
+      if (index+1 === mainid.length) {
+        return `return require(${id});`
+      }
+      return `require(${id});`;
+    })).join('\n');
+
+    
+    function __d(factory, id) {
+      modules.push([factory, id]);
+    }
+
+    function require(id) {
+      mainid.push(id)
+    }
+
+  })
+}
+
+function bundlePackage(entry, platform) {
+  const id = crypto.createHash('MD5').update(entry).digest('hex');
+  const temp = path.resolve(outputDir, id);
+
+  return new Promise(function (resolve, reject) {
+    const bundle = spawn('react-native', ['bundle', '--platform', platform, '--dev', 'false', '--entry-file', entry, '--bundle-output', temp]);
+
+    bundle.stdout.on('data', (data) => {
+      // console.log(`stdout: ${data}`);
+    });
+
+    bundle.stderr.on('data', (data) => {
+      // console.log(`stderr: ${data}`);
+    });
+
+    bundle.on('error', (error)=>{
+      reject(error);      
+    })
+
+    bundle.on('close', (code) => {
+      if (code === 0) {
+        // 读取缓存
+        const script = fs.readFileSync(temp);
+        setTimeout(function () {
+          fse.removeSync(temp);
+          fse.removeSync(temp+'.meta');
+        }, 1000);
+        resolve(script);
+      }
+    });
+  });
+}
+
+/**
+ *  entry.js node_modules 根目录
+ *
+ *  index.js 中需要通赤 require(`${App.name}Entry`) 导入
+ */
+function createEntryFile() {
+  const entryjs = fs.readFileSync(path.resolve(templateDir, 'entry.js')).toString();
+  const App = require(path.resolve(projRoot, 'app.json'));
+
+
+  const outputDir = path.resolve(projRoot, 'node_modules');
+  const output = path.resolve(outputDir, genModuleName(`${App.name}Entry`)+'.js');
+
+  // 确认 dist 存在
+  fse.ensureDirSync(outputDir)
+  
+  const buffer = entryjs.replace('{{InternalModules}}', function () {
+
+    /**
+     *  import internal modules, dependencies etc.
+     *  对于项目的第三方依赖，在 app 打包时一次性导入
+     *  对于业务代码，通过统一的途径引用依赖的库，不要再次导入
+     */
+    const InternalModules = apmConfig['internal-modules'];
+    const definations = InternalModules.map(function (name) {
+      return `get ${genModuleName(name)}() { return require('${name}'); }`
+    });
+    
+    return `{\n  ${definations.join(',\n  ')}\n}`
+
+  }).replace('{{StaticPackages}}', function () {
+
+    const StaticPackages = apmConfig['static-packages'];
+    const definations = StaticPackages.map(function (name) {
+      return `${genModuleName(name)}: require('${genModulePath(name)}')`
+    });
+    
+    return `{\n  ${definations.join(',\n  ')}\n}`
+    
+  }).replace('{{DynamicPackages}}', function () {
+
+    // 只在 __DEV__ == true 时加载
+
+    if (!__DEV__) { return '{}'; }
+
+    const DynamicPackages = apmConfig['dynamic-packages'];
+    const definations = DynamicPackages.map(function (name) {
+      return `get ${genModuleName(name)}() { return require('${genModulePath(name)}'); }`
+    });
+
+    return `{\n  ${definations.join(',\n  ')}\n}`
+    
+  }).replace(/[\S]+{\{MainPackage}}[\S\s]*/, function (str) {
+
+    if (__DEV__) {
+      const main = genModulePath(apmConfig['main']);
+      return `require('${main}');`;
+    }else{
+      return str.replace('{{MainPackage}}', `'${apmConfig['main']}'`)
+    }
+    
+  })
+  .replace('{{BUNKERID}}', require(require('../package.json').name));
+  
+  // write to node_modules/Entry.js
+  fs.writeFileSync(output, buffer);
+}
+
+/************************************************************************************************/
+function genModuleName(name) {
+  return camelcase(name).replace(/^[a-z]/, function (str) {
+    return str.toUpperCase();
+  })
+}
+
+function genModulePath(name) {
+  return path.relative(outputDir, path.resolve(projRoot, name))
+}
+
+function findPackageEntry(name) {
+  var entry = path.resolve(projRoot, name);
+  var entryFile = Module._resolveFilename(entry);
+  return entryFile;
+}
+
+function findEntryFilePath() {
+  return path.resolve(outputDir, './entry.js');
+}
+function findAppJSON() {
+  const relativePath = path.relative(outputDir, projRoot);
+
+  return `${relativePath}/app.json`;
+}
+
+function parseBoolean(value) {
+  if (typeof value === 'string') {
+    value = value.toLowerCase()
+    return value.length && value !== 'false' && value !== 'no';
+  }
+
+  return !!value;
+}
+
+
+/************************************************************************************************/
+
+function TickTock() {
+
+  const ee = new EventEmitter();
+  var isRuning = false;
+
+  const TickTock = {
+    get begin() {
+      if (!isRuning) {
+        setTimeout(begin, 100);
+      }
+      
+      return TickTock;
+    },
+    get end() {
+      if (isRuning) setTimeout(end, 100);
+      return TickTock;
+    }
+  };
+
+  return TickTock;
+
+  function begin() {
+    const tickTock = spawn('node', ['-e', `setInterval(function(){process.stdout.write('.')}, 1000);`], {
+      stdio: [0, 1, 2]
+    });
+    
+    ee.once('end', function () {
+      tickTock.kill();
+      process.stdout.write('.\n');
+      isRuning = false;
+    })  
+
+    isRuning = true;
+  }
+
+  function end() {
+    ee.emit('end');
+  }
+}
+

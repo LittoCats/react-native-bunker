@@ -1,0 +1,43 @@
+const fs = require('fs');
+const path = require('path');
+const YAML = require('js-yaml')
+
+exports.ensureRNRoot = function (msg) {
+  try {
+    var projRoot = path.resolve('./');
+    fs.accessSync(path.resolve(projRoot, 'node_modules', 'react-native'));
+    return projRoot;
+  }catch(e){
+    return console.log('ERROR:'.red, msg);
+  }
+}
+
+exports.loadBunkerConfig = function (projRoot) {
+  const bunker = YAML.load(fs.readFileSync(path.resolve(projRoot, 'bunker.yaml')));
+
+  const InternalModules = bunker['internal-modules'] = bunker['internal-modules'] || [];
+  const StaticPackages = bunker['static-packages'] = bunker['static-packages'] || [];
+  const DynamimcPackages = bunker['dynamic-packages'] = bunker['dynamic-packages'] || [];
+
+  const dist = path.resolve(projRoot, bunker.bunker.dist || 'dist');
+
+  /**
+   *  检查主包是否设置
+   */
+  try {
+    if (typeof bunker.main !== 'string' || bunker.main.length === 0) throw new Error();
+    !function () {
+      var main = bunker.main;
+      if (DynamimcPackages.indexOf(main) === -1) {
+        DynamimcPackages.push(main);
+      }
+    }()
+
+    return bunker;
+  }catch(e){
+    console.log('ERROR:'.red, 'Application MainPackage has not been seted. Check ${PROJROOT}/bunker.yaml.')
+    process.exit()
+  }
+}
+
+

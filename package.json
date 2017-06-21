@@ -1,0 +1,17 @@
+{
+  "name": "react-native-bunker",
+  "version": "0.0.1",
+  "description": "ReactNative Application Package Manager",
+  "main": "bunker.js",
+  "author": "程巍巍",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "crypto-js": "latest",
+    "js-yaml": "latest",
+    "fs-extra": "latest",
+    "commander": "latest",
+    "colors": "latest",
+    "express": "latest",
+    "camelcase": "latest"
+  }
+}
