@@ -1,0 +1,219 @@
+/**
+ *  entry.js
+ *  
+ *  这是一个模板文件，需要使用 bunker 工具生成目标文件才能使用
+ */
+
+const {
+  Platform,
+  AsyncStorage,
+  AppRegistry,
+  View,
+  Alert
+} = require('react-native');
+const crypto = require('crypto-js');
+
+const config = {};
+
+/*******************************************************************************
+                                    模块声名
+
+模板参数 $args: [Dependencies Preload Modules BUNKERID, App]
+需要 node 支持模板字符串
+编译该模板的方法为：
+  
+  var template = fs.readFileSync({path});
+  var script = new Function(... $args, template).call(this, ... args);
+
+*******************************************************************************/
+
+/**
+ *  Dependencies 需要静态加载，需要直接使用 require
+ *  Modules 动态加载，只需要声明即可
+ */
+const ModuleDefinations = {
+  Dependencies: {{Dependencies}},
+  PreLoad: {{Preload}},
+  Modules: {{Modules}}
+};
+
+/**
+ *  Bunker 的实现实际上是该文件，必须通过 BunkerID 与动态模块共享实现
+ *  BUNKERID 必须不与 Packager 自动生成的 moduleID 重复，
+ *  如果有需要，可以修改 src/magic.js 中的值
+ */
+const BUNKERID = {{BunkerID}};
+
+const App = {
+  ... {{App}}
+};
+
+
+/*******************************************************************************
+                                    公共接口
+*******************************************************************************/
+
+exports.Dependencies = buildDependencies();
+exports.Modules = buildModules();
+exports.App = App;
+exports.config = function (key, value, _public = false) {
+  const field = _public ? exports : config;
+  if (field[key] !== undefined) throw new Error(`Bunker ${_public ? 'public' : 'private'} configure for key ${key} has been configured.`);
+  field[key] = value;
+}
+
+exports.loadModule = async function (name) {
+  var module = {name};
+  var script = loadModuleSource(module);
+  compileModule(module, script);
+
+  return module.exports;
+}
+
+/**
+ *  公共接口加入到全局 module 中
+ *  
+ */
+__d(function (global, require, module) {
+  module.exports = exports;
+}, BUNKERID);
+
+/*******************************************************************************
+                                    功能定义
+*******************************************************************************/
+function buildDependencies() {
+  return ModuleDefinations.Dependencies;
+}
+
+/**
+ *  
+ */
+function buildModules() {
+  var modules = {__proto__: ModuleDefinations.Modules};
+
+  Object.keys(ModuleDefinations.Preload).forrEach(function (key) {
+    Object.defineProperty(modules, key, {
+      get: async function() {
+        return ModuleDefinations.Preload[key];
+      }
+    })
+  })
+  return modules;
+}
+
+/**
+ *  
+ */
+async function loadModule(module) {
+  if (!module.isInitialized) {
+    var script = await loadModuleSource(module);
+    compileModule(module, script); 
+    module.isInitialized = true; 
+  }
+
+  return module.exports;
+}
+
+async function loadModuleSource(module) {
+  if (typeof config.loadModuleSource !== 'function') {
+    throw new Error(`Bunker's loadModuleSource must be configured before dynamic module can be used.`);
+  }
+  return config.loadModuleSource(module.name);
+}
+
+/**
+ *  使用局部缓存，当 mainModule 释放后，所有的资源全部释放
+ */
+function compileModule(module, script) {
+  
+  const modules = Object.create(null);
+  const globalObject = {__proto__: global};
+
+  return module.exports = new Function('__d', 'require', script).call(globalObject, define, require);
+
+  function define(
+    factory: FactoryFn,
+    moduleId: number,
+    dependencyMap
+  ) {
+    if (moduleId in modules) {
+      // prevent repeated calls to `global.nativeRequire` to overwrite modules
+      // that are already loaded
+      return;
+    }
+
+    modules[moduleId] = {
+      dependencyMap,
+      exports: undefined,
+      factory,
+      hasError: false,
+      isInitialized: false,
+    };
+  }
+
+  function require(moduleId) {
+    if (moduleId === BUNKERID) return originalRequire(BUNKERID);
+
+    const module = modules[moduleId];
+
+    return module && module.isInitialized
+      ? module.exports
+      : loadModuleImplementation(moduleId, module);
+  }
+
+  function loadModuleImplementation(moduleId, module) {
+
+    // We must optimistically mark module as initialized before running the
+    // factory to keep any require cycles inside the factory from causing an
+    // infinite require loop.
+    module.isInitialized = true;
+    const exports = module.exports = {};
+    const {factory, dependencyMap} = module;
+    try {
+
+      const moduleObject = {exports};
+
+      // keep args in sync with with defineModuleCode in
+      // packager/src//Resolver/index.js
+      // and packager/src//ModuleGraph/worker.js
+      factory(globalObject, require, moduleObject, exports, dependencyMap);
+
+      // $FlowFixMe: This is only sound because we never access `factory` again
+      module.factory = undefined;
+      
+      return (module.exports = moduleObject.exports);
+
+    } catch (e) {
+      module.hasError = true;
+      module.error = e;
+      module.isInitialized = false;
+      module.exports = undefined;
+      throw e;
+    }
+  }
+}
+/*******************************************************************************
+                                    自动加载
+*******************************************************************************/
+
+/**
+ *  hook AppRegistery.runApplication, 获取启动参数
+ */
+AppRegistery.runApplication = (function (runApplication) {
+  return function runApplication(appName, params) {
+    if (App.name === appName) {
+      App.params = params;
+    }
+    return runApplication.call(AppRegistery, appName, params);
+  };
+})(AppRegistery.runApplication);
+
+AppRegistery.registerComponent(App.name, ()=> View);
+
+/**
+ *  加载主模块
+ */
+require('react-native-bunker').Modules.Main.then(function (module) {
+  AppRegistery.registerComponent(App.name, ()=> module);
+  AppRegistery.runApplication(App.name, App.params);
+});

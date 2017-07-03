@@ -1,43 +1,76 @@
 const fs = require('fs');
 const path = require('path');
-const YAML = require('js-yaml')
+const YAML = require('js-yaml');
+const camelcase = require('camelcase');
+const EventEmitter = require('events');
+const {spawn} = require('child_process');
 
 exports.ensureRNRoot = function (msg) {
+  var projRoot = path.resolve('./');
   try {
-    var projRoot = path.resolve('./');
-    fs.accessSync(path.resolve(projRoot, 'node_modules', 'react-native'));
-    return projRoot;
+    return ensureRNRoot(projRoot);
   }catch(e){
-    return console.log('ERROR:'.red, msg);
+    console.log('ERROR:'.red, msg);
+    console.error(e)
+  }
+
+  function ensureRNRoot(projRoot) {
+    try {
+      require(path.resolve(projRoot, 'app.json'));
+      fs.accessSync(path.resolve(projRoot, 'node_modules', 'react-native'));
+      return projRoot;
+    }catch(e) {
+      var parent = path.dirname(projRoot);
+      if (projRoot === parent) throw e;
+      return ensureRNRoot(parent);
+    }
   }
 }
 
-exports.loadBunkerConfig = function (projRoot) {
-  const bunker = YAML.load(fs.readFileSync(path.resolve(projRoot, 'bunker.yaml')));
 
-  const InternalModules = bunker['internal-modules'] = bunker['internal-modules'] || [];
-  const StaticPackages = bunker['static-packages'] = bunker['static-packages'] || [];
-  const DynamimcPackages = bunker['dynamic-packages'] = bunker['dynamic-packages'] || [];
+exports.TickTock = function TickTock() {
 
-  const dist = path.resolve(projRoot, bunker.bunker.dist || 'dist');
+  const ee = new EventEmitter();
+  var isRuning = false;
 
-  /**
-   *  检查主包是否设置
-   */
-  try {
-    if (typeof bunker.main !== 'string' || bunker.main.length === 0) throw new Error();
-    !function () {
-      var main = bunker.main;
-      if (DynamimcPackages.indexOf(main) === -1) {
-        DynamimcPackages.push(main);
+  const TickTock = {
+    get begin() {
+      if (!isRuning) {
+        setTimeout(begin, 100);
       }
-    }()
+      
+      return TickTock;
+    },
+    get end() {
+      if (isRuning) setTimeout(end, 100);
+      return TickTock;
+    }
+  };
 
-    return bunker;
-  }catch(e){
-    console.log('ERROR:'.red, 'Application MainPackage has not been seted. Check ${PROJROOT}/bunker.yaml.')
-    process.exit()
+  return TickTock;
+
+  function begin() {
+    const tickTock = spawn('node', ['-e', `setInterval(function(){process.stdout.write('.')}, 1000);`], {
+      stdio: [0, 1, 2]
+    });
+    
+    ee.once('end', function () {
+      tickTock.kill();
+      process.stdout.write('.\n');
+      isRuning = false;
+    })  
+
+    isRuning = true;
+  }
+
+  function end() {
+    ee.emit('end');
   }
 }
 
 
+exports.camelcase = function (name) {
+  return camelcase(name).replace(/^[a-z]/, function (name) {
+    return name.toUpperCase();
+  })
+}

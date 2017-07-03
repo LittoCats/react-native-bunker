@@ -7,32 +7,32 @@ var path = require('path');
 
 require('colors');
 
+var {ensureRNRoot} = require('./.utils');
+
 var package = require('../package.json');
 
 program
   .version(package.version)
   .description('这个命令必须在 react-native 项目根目录下运行。')
+  .option('-f --force', '如果 Bunker 配制已存在，删除后重新初始化', false)
   .parse(process.argv);
 
-var projRoot = path.resolve('./');
-
 // 检查是否是 react-native 项目根目录
-try {
-  fs.accessSync(path.resolve(projRoot, 'node_modules', 'react-native'));
-}catch(e){
-  return console.log('ERROR:'.red, program.description());
+var projRoot = ensureRNRoot();
+
+var RCPath = path.resolve(projRoot, '.bunker');
+var tempPath = path.resolve(__dirname, '../defaults/bunker');
+
+if (!program.force) {
+  try {
+    fs.accessSync(RCPath, fs.constants.F_OK);
+    console.warn(`bunker configure already exists. You should reinit after remove it.\n\n${RCPath}\n`);
+    return;
+  }catch(e) {}
 }
 
-var configPath = path.resolve(projRoot, 'bunker.yaml');
-var tempPath = path.resolve(__dirname, '../defaults/bunker.yaml');
-
-try {
-  fs.accessSync(configPath, fs.constants.F_OK)
-  console.log('WARN:'.yellow, 'apm.yaml already exists. You should reinit after remove it.');
-  return;
-}catch(e) {}
-
-fse.copy(tempPath, configPath, function (error) {
-  if (error) return console.log('ERROR:'.red, error.message);
-  console.log('done');
+console.log(`copy ${path.relative(projRoot, tempPath)} to ${path.relative(projRoot, RCPath)}`);
+fse.copy(tempPath, RCPath, function (error) {
+  if (error) return console.error(error);
+  console.log('done.'.green);
 })

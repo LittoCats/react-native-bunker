@@ -1,0 +1,38 @@
+# Application Package Manager 默认配制
+
+Source: src
+
+# 依赖
+# 所有的依赖通过 ${build}/entry.js 直接打包到bundle中，只能通过下面这种方式引用：
+# 
+#  const {React, React:{Component}} = apm.InternalModules.React;
+# 
+Dependencies:
+
+
+# 
+# 静态包直接打包到 bundle 中，无法动态更新
+# 主要用于对 Bunker 及 Application 进行全局配制
+# 
+# 模块中 通过 const Bunker = require('react-native-bunker') 访问;
+# 
+Preload:
+
+# 应用需要动态加载的模块
+# 
+# 动态模块，相互之间不能有依赖关系
+# 
+# 动态模块内部的依赖会会全部打包到该模块中，因此公共的依赖最好单独打包
+# 
+# 注意：如果模块正在使用时被卸载，可能产生不可预知的错误
+# 
+# 模块中 通过 const Bunker = require('react-native-bunker') 访问;
+# main 模块不需在这里声名
+# 
+# PreLoad 的模块，也可以通过 Modules 访问，因此需要注意命名空间
+Modules:
+  
+
+
+# 主模块，app 加载完成后，通过该模块启动 app
+main: 

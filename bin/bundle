@@ -5,107 +5,266 @@ const fs = require('fs');
 const fse = require('fs-extra');
 const path = require('path');
 const YAML = require('js-yaml');
-const camelcase = require('camelcase');
-const {spawn} = require('child_process');
+const {spawn, exec} = require('child_process');
 const crypto = require('crypto');
 const Module = require('module');
 const EventEmitter = require('events');
 
 require('colors');
 
-const {ensureRNRoot, loadBunkerConfig} = require('./.utils');
-
+const utils = require('./.utils');
+const {ensureRNRoot, TickTock} = utils;
 
 const packageInfo = require('../package.json');
 
 program
   .version(packageInfo.version)
   .description('这个命令必须在 react-native 项目根目录下运行。')
-  .option('-d --dev [boolean]', '开发模式，开发模块，不打分包', 'true')
+  .option('-d --dev', '开发模式，开发模块，不打分包')
   .option('-o --output [string]', '输出目录，默认使用 bunker.yaml 中的定义：bunker.dist')
   .parse(process.argv);
 
-const __DEV__ = parseBoolean(program.dev);
+const __DEV__ = program.dev || false;
 
 
 // 检查是否是 react-native 项目根目录
-const projRoot = ensureRNRoot(program.description());;
+const projRoot = ensureRNRoot(program.description());
+
+// 默认的 output dir 为项目根目录下的 dist 文件夹
+const outputDir = path.resolve(projRoot, program.output || './dist');
+
+// 载入 bunkerConfig
+const bunkerConfig = YAML.safeLoad(fs.readFileSync(path.resolve(projRoot, '.bunker')));
 
 /**
- *  
+ *  生成 AppEntry.js 
+ *  输出文件为 ${projRoot}/node_modules/AppEntry.js
  */
-
-const apmConfig = loadBunkerConfig(projRoot);
-
-const outputDir = program.output ? path.resolve(program.output) : apmConfig.bunker.dist;
-const templateDir = path.resolve(__dirname, '../defaults');
-
-/**
- *  生成 entry file
- */
-try {
-  createEntryFile();
-}catch(e){
-  console.log('ERROR'.red, 'buld entry.js fail.');
-  return console.error(e);
-}
-
-
-
-/**
- *  编译动态模块 __DEV__ == false
- */
+buildAppEntry();
+console.log('build AppEntry.js done.'.green);
 
 if (!__DEV__) {
-  const tickTock = TickTock();
-  Promise.resolve(tickTock.begin)
-  .then(function () {
-    return apmConfig['dynamic-packages'].map(compilePackage);
-  }).then(function (tasks) {
-    return Promise.all(tasks);
-  }).then(function () {
+  let tickTock = new TickTock().begin;
+  bundleModules().then(function () {
     tickTock.end;
+    console.log('bundle modules done.'.green); 
   }).catch(function (error) {
     tickTock.end;
-    console.error(error)
-  });
+    console.error(error);
+  })
 }
 
-/************************************************************************************************/
+/*******************************************************************************
+                            build App Entry
 
-function compilePackage(name) {
+生成 AppEntry.js 
+输出文件为 ${projRoot}/node_modules/AppEntry.js
 
-  // 确认 dist 存在
-  fse.ensureDirSync(outputDir)
-  
-  const entry = findPackageEntry(name);
+模板参数 $args: [Dependencies Preload Modules BUNKERID, App]
+*******************************************************************************/
+function buildAppEntry() {
+  const template = fs.readFileSync(path.resolve(__dirname, '../defaults/entry')).toString();
+  const output = path.resolve(projRoot, 'node_modules', 'AppEntry.js');
 
-  return Promise.resolve().then(function () {
-    return ['ios', 'android'].map(function (platform) {
-      const output = path.resolve(outputDir, `${name}.${platform}`);
-      return compilePackageImpl(entry, platform).then(function (script) {
+  class AppEntry {
+    constructor() {
+      this.Dependencies = {};
+      this.Preload = {};
+      this.Modules = {};
+    }
+    genBunkerID() {
+      this.BunkerID = require('../src/magic');
+      return this;
+    }
+    loadAppConfig() {
+      this.App = `require('${path.resolve(projRoot, 'app.json')}')`;
+      return this;
+    }
+    buildDependencies() {
+      var list = [
+        ... Object.keys(require(path.resolve(projRoot, 'package.json')).dependencies).filter(function (name) {
+          try {
+            return !!Module._resolveFilename(path.resolve(projRoot, 'node_modules', name));
+          }catch(e){
+            console.warn(`Dependency module ${name} in package.json is not found, ignore.`)
+            return false;
+          }
+        }),
+        ... bunkerConfig.Dependencies
+      ];
+      this.Dependencies = buildModules(list, function (name) {
+        return `get ${buildModuleName(name)}(){ return require('${name}');}`;
+      });
+      return this;
+    }
+
+    buildPreload() {
+      this.Preload = buildModules(bunkerConfig.Preload, function (name) {
+        return `get ${buildModuleName(name)}(){return require('${path.resolve(projRoot, bunkerConfig.Source, name)}')}`;
+      });
+      return this;
+    }
+
+    buildModules() {
+      this.Modules = buildModules([... bunkerConfig.Modules || [], bunkerConfig.Main], function (name) {
+        var _name = buildModuleName(name);
+        return buildModuleScript(_name, name);
+      });
+
+      return this;
+
+      function buildModuleScript(name, request) {
+        request = path.resolve(projRoot, bunkerConfig.Source, request)
         /**
-         *  分包 开头加入 md5 校验
-         *  也可用来检查服务器上的内容是否有更新
+         *  develop 状态下，直接返回 require 结果
+         *  product 状态下，通过 moduleID 加载相应的模块
          */
-        script = ['/*', crypto.createHash('MD5').update(script).digest('HEX'), '*/', script].join('');
-        fs.writeFileSync(output, script);
-      })
-    });
-  }).then(function (tasks) {
-    return Promise.all(tasks)
-  }).catch(function (e) {
-    tickTock.end;
-    throw e;
-  });
+        return __DEV__ 
+         ? `get ${name}(){return Promise.resolve(require('${request}'));}`
+         : `get ${name}(){var module = this._${name} = this._${name} || {name: '${buildModuleID(request)}'};return loadModule(module);}`;
+      }
+    }
+
+    export() {
+      // 模板参数 $args: [Dependencies Preload Modules BunkerID, App]
+      var script = template
+      .replace(/\{\{Dependencies}\}/g, this.Dependencies)
+      .replace(/\{\{Preload}\}/g, this.Preload)
+      .replace(/\{\{Modules}\}/g, this.Modules)
+      .replace(/\{\{BunkerID}\}/g, this.BunkerID)
+      .replace(/\{\{App}\}/g, this.App);
+
+      fs.writeFileSync(output, script);
+    }
+  }
+
+  function buildModules(list, loadModule) {
+    var modules = {};
+    var srcDir = path.resolve(projRoot, bunkerConfig.Source);
+    for (var item of list) {
+      /**
+       *  所有模块的路径都应转换为相对路径
+       */
+      item = path.resolve(srcDir, item);
+      item = path.relative(srcDir, item);
+      buildModule(modules, item.split(/\/+/g), loadModule(item));
+    }
+
+    return pretty(`{${toSource(modules)}}`);
+
+    function toSource(map, indent = 0) {
+      return Object.keys(map).map(function (key) {
+        var value = map[key];
+
+        if (typeof value === 'string') {
+          return value;
+        }else{
+          return `get ${key}(){return {${toSource(value, indent+1)}}}`
+        }
+      }).join(',');
+    }
+
+    function pretty(str) {
+      var indent = '  ';
+      return str.replace(/(\{)|(\}[,;]*)|([^{}]+)/g, function (str) {
+        if (str === '{') {
+          indent += '  ';
+          return `${str}\n`;
+        }
+
+        if (str[0] === '}') {
+          indent = indent.slice(0, -2);
+          return `\n${indent}${str}\n`;
+        }
+        return `${indent}${str}`;;
+      }).replace(/\n[\s]*\n/g, '\n').replace(/[\s]+$/, '');
+    }
+  }
+
+  function buildModule(modules, paths, module) {
+    for (var path of paths.slice(0, -1)) {
+      if (path === '..') path = '$';
+      path = utils.camelcase(path);
+      modules = modules[path] = modules[path] || {};
+    }
+
+    path = utils.camelcase(paths.pop());
+
+    modules[path] = module;
+  }
+
+  function buildModuleName(name) {
+    name = name.replace(/^\.*\/*/, '').split(/\/+/g).pop();
+    name = utils.camelcase(name);
+    return name;
+  }
+
+  new AppEntry()
+  .genBunkerID()
+  .loadAppConfig()
+  .buildDependencies()
+  .buildPreload()
+  .buildModules()
+  .export();
 }
 
-/**
- *  使用 child_process 在后台打包
- */
-function compilePackageImpl(entry, platform) {
-  return bundlePackage(entry, platform).then(function (script) {
+/*******************************************************************************
+                            bundle Modules
 
+需要指定输出目录
+*******************************************************************************/
+
+function bundleModules() {
+  var srcDir = path.resolve(projRoot, bunkerConfig.Source)
+
+  // 新建输出目录
+  fse.mkdirpSync(outputDir);
+
+  var tasks = [
+    ... bunkerConfig.Modules || [],
+    bunkerConfig.Main
+  ].map(function (item) {
+    return path.resolve(srcDir, item)
+  }).map(function (item) {
+    return bundleModule(item, buildModuleID(item));
+  });
+  
+  return Promise.all(tasks);
+
+  function bundleModule(request, id) {
+    request = Module._resolveFilename(request);
+    return Promise.all(['ios', 'android'].map(function (platform) {
+      return bundleModuleImpl(request, id, platform);
+    }));
+  }
+
+  function bundleModuleImpl(request, id, platform) {
+    var output = path.resolve(outputDir, `${id}.${platform}.js`);
+    var assets = path.resolve(outputDir, `${id}.${platform}`);
+    fse.mkdirpSync(assets);
+
+    return new Promise(function (resolve, reject) {
+      exec(`
+cd ${projRoot}
+react-native bundle --platform ${platform} --dev false --entry-file '${request}' --bundle-output ${output} --assets-dest ${assets}
+        `, function (error, stdout, stderr) {
+        if (error) return reject(error);
+        if (stderr) return reject(new Error(stderr));
+        // 读取缓存
+        console.log(`build ${request} done.`);
+        const script = fs.readFileSync(output).toString();
+        const source = compileModuleScript(script);
+        fs.writeFileSync(output, `/*${crypto.createHash('MD5').update(source).digest('hex')}*/\n${source}`);
+
+        fse.removeSync(output+'.meta');
+        fse.removeSync(assets)
+
+        resolve();
+      });
+    });
+  }
+
+  function compileModuleScript(script) {
     const modules = [];
     const mainid = [];
 
@@ -128,186 +287,16 @@ function compilePackageImpl(entry, platform) {
     function require(id) {
       mainid.push(id)
     }
-
-  })
-}
-
-function bundlePackage(entry, platform) {
-  const id = crypto.createHash('MD5').update(entry).digest('hex');
-  const temp = path.resolve(outputDir, id);
-
-  return new Promise(function (resolve, reject) {
-    const bundle = spawn('react-native', ['bundle', '--platform', platform, '--dev', 'false', '--entry-file', entry, '--bundle-output', temp]);
-
-    bundle.stdout.on('data', (data) => {
-      // console.log(`stdout: ${data}`);
-    });
-
-    bundle.stderr.on('data', (data) => {
-      // console.log(`stderr: ${data}`);
-    });
-
-    bundle.on('error', (error)=>{
-      reject(error);      
-    })
-
-    bundle.on('close', (code) => {
-      if (code === 0) {
-        // 读取缓存
-        const script = fs.readFileSync(temp);
-        setTimeout(function () {
-          fse.removeSync(temp);
-          fse.removeSync(temp+'.meta');
-        }, 1000);
-        resolve(script);
-      }
-    });
-  });
-}
-
-/**
- *  entry.js node_modules 根目录
- *
- *  index.js 中需要通赤 require(`${App.name}Entry`) 导入
- */
-function createEntryFile() {
-  const entryjs = fs.readFileSync(path.resolve(templateDir, 'entry.js')).toString();
-  const App = require(path.resolve(projRoot, 'app.json'));
-
-
-  const outputDir = path.resolve(projRoot, 'node_modules');
-  const output = path.resolve(outputDir, genModuleName(`${App.name}Entry`)+'.js');
-
-  // 确认 dist 存在
-  fse.ensureDirSync(outputDir)
-  
-  const buffer = entryjs.replace('{{InternalModules}}', function () {
-
-    /**
-     *  import internal modules, dependencies etc.
-     *  对于项目的第三方依赖，在 app 打包时一次性导入
-     *  对于业务代码，通过统一的途径引用依赖的库，不要再次导入
-     */
-    const InternalModules = apmConfig['internal-modules'];
-    const definations = InternalModules.map(function (name) {
-      return `get ${genModuleName(name)}() { return require('${name}'); }`
-    });
-    
-    return `{\n  ${definations.join(',\n  ')}\n}`
-
-  }).replace('{{StaticPackages}}', function () {
-
-    const StaticPackages = apmConfig['static-packages'];
-    const definations = StaticPackages.map(function (name) {
-      return `${genModuleName(name)}: require('${genModulePath(name)}')`
-    });
-    
-    return `{\n  ${definations.join(',\n  ')}\n}`
-    
-  }).replace('{{DynamicPackages}}', function () {
-
-    // 只在 __DEV__ == true 时加载
-
-    if (!__DEV__) { return '{}'; }
-
-    const DynamicPackages = apmConfig['dynamic-packages'];
-    const definations = DynamicPackages.map(function (name) {
-      return `get ${genModuleName(name)}() { return require('${genModulePath(name)}'); }`
-    });
-
-    return `{\n  ${definations.join(',\n  ')}\n}`
-    
-  }).replace(/[\S]+{\{MainPackage}}[\S\s]*/, function (str) {
-
-    if (__DEV__) {
-      const main = genModulePath(apmConfig['main']);
-      return `require('${main}');`;
-    }else{
-      return str.replace('{{MainPackage}}', `'${apmConfig['main']}'`)
-    }
-    
-  })
-  .replace('{{BUNKERID}}', require(require('../package.json').name));
-  
-  // write to node_modules/Entry.js
-  fs.writeFileSync(output, buffer);
-}
-
-/************************************************************************************************/
-function genModuleName(name) {
-  return camelcase(name).replace(/^[a-z]/, function (str) {
-    return str.toUpperCase();
-  })
-}
-
-function genModulePath(name) {
-  return path.relative(outputDir, path.resolve(projRoot, name))
-}
-
-function findPackageEntry(name) {
-  var entry = path.resolve(projRoot, name);
-  var entryFile = Module._resolveFilename(entry);
-  return entryFile;
-}
-
-function findEntryFilePath() {
-  return path.resolve(outputDir, './entry.js');
-}
-function findAppJSON() {
-  const relativePath = path.relative(outputDir, projRoot);
-
-  return `${relativePath}/app.json`;
-}
-
-function parseBoolean(value) {
-  if (typeof value === 'string') {
-    value = value.toLowerCase()
-    return value.length && value !== 'false' && value !== 'no';
-  }
-
-  return !!value;
-}
-
-
-/************************************************************************************************/
-
-function TickTock() {
-
-  const ee = new EventEmitter();
-  var isRuning = false;
-
-  const TickTock = {
-    get begin() {
-      if (!isRuning) {
-        setTimeout(begin, 100);
-      }
-      
-      return TickTock;
-    },
-    get end() {
-      if (isRuning) setTimeout(end, 100);
-      return TickTock;
-    }
-  };
-
-  return TickTock;
-
-  function begin() {
-    const tickTock = spawn('node', ['-e', `setInterval(function(){process.stdout.write('.')}, 1000);`], {
-      stdio: [0, 1, 2]
-    });
-    
-    ee.once('end', function () {
-      tickTock.kill();
-      process.stdout.write('.\n');
-      isRuning = false;
-    })  
-
-    isRuning = true;
-  }
-
-  function end() {
-    ee.emit('end');
   }
 }
 
+/*******************************************************************************
+                            utils
+
+需要指定输出目录
+*******************************************************************************/
+function buildModuleID(absolute) {
+  var relative = path.relative(projRoot, absolute);
+  var id = crypto.createHash('MD5').update(relative).digest('hex');
+  return id;
+}
