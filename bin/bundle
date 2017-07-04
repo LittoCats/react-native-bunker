@@ -61,6 +61,7 @@ if (!__DEV__) {
 输出文件为 ${projRoot}/node_modules/AppEntry.js
 
 模板参数 $args: [Dependencies Preload Modules BUNKERID, App]
+所有的模块全部为只读
 *******************************************************************************/
 function buildAppEntry() {
   const template = fs.readFileSync(path.resolve(__dirname, '../defaults/entry')).toString();

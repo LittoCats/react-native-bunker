@@ -13,26 +13,23 @@ const crypto = require('crypto');
 
 require('colors');
 
-const {ensureRNRoot, loadBunkerConfig} = require('./.utils');
+const {ensureRNRoot} = require('./.utils');
 
 const packageInfo = require('../package.json');
 program
   .version(packageInfo.version)
   .description('这个命令必须在 react-native 项目根目录下运行。')
   .option('-p --port [int]', '开发模式，开发模块，不打分包', 3000)
-  .option('-s --source [string]', '文件目录，默认使用 bunker.yaml 中的定义：bunker.dist')
+  .option('-s --source [string]')
   .parse(process.argv);
 
 
 /******************************************************************************/
 const projRoot = ensureRNRoot(program.description());
 
-const bunkerConfig = loadBunkerConfig(projRoot);
-const staticPath = program.source ? path.resolve(program.source) : bunkerConfig.bunker.dist;
-
-// 生成路由表
-const packageList = generatePackageList();
-
+// 载入 bunkerConfig
+const bunkerConfig = YAML.safeLoad(fs.readFileSync(path.resolve(projRoot, '.bunker')));
+const sourceDir = path.resolve(projRoot, 'dist');
 
 /******************************************************************************/
 
@@ -41,13 +38,36 @@ const app = express();
 /**
  *  
  */
-packageList.forEach(function ([route, file, md5]) {
-  console.log(`add route ${route} => ${file}`)
-  app.get(`/${route}/:platform`, generateResponder(file, md5));
-});
+app.get(`/:module/:platform`, function (req, res) {
+  const moduleID = req.params.module;
+  const platform = req.params.platform;
+  const signature = req.header('content-md5');
 
-// app.use(express.static(staticPath));
-// return;
+  console.log(moduleID, platform, signature);
+  /**
+   *  step 1: check file exists
+   */
+  const moduleFile = path.resolve(sourceDir, `${moduleID}.${platform}.js`);
+
+  try {
+    fs.accessSync(moduleFile, fs.constants.F_OK);
+  }catch(e){
+    return res.status(404).send();
+  }
+
+  /**
+   *  step 2: check signature
+   */
+  if (signature && signature.toLowerCase() === readSignature(moduleFile)) {
+    res.status(304).send();
+  }else{
+    fs.readFile(moduleFile, function (error, buffer) {
+      if (error) return res.status(410).send();
+      res.setHeader('content-type', 'application/javascript')
+      res.send(buffer);
+    });
+  }
+});
 
 const server = app.listen(parseInt(program.port), function () {
   const host = server.address().address;
@@ -59,45 +79,6 @@ const server = app.listen(parseInt(program.port), function () {
 
 /******************************************************************************/
 
-function generateResponder(file, md5) {
-  return function (req, res) {
-    const platform = req.params.platform;
-    const signature = req.header('content-md5');
-
-    console.log(req.url.yellow, signature);
-
-    if (signature.toLowerCase() === md5[platform]) {
-      console.log('not modified.'.green);
-      return res.status(304).send();
-    }
-    
-    fs.readFile(file+'.'+platform, function (error, buffer) {
-      if (error) {
-        return res.status(410).send();
-      }
-      res.send(buffer);
-    })
-  }
-}
-
-function generatePackageList() {
-  const DynamicPackages = bunkerConfig['dynamic-packages'];
-
-  return DynamicPackages.reduce(function (routes, name) {
-    const file = path.resolve(staticPath, name);
-    routes.push([
-      // 包名的 md5 值做为 路由
-      crypto.createHash('MD5').update(name).digest('hex'), 
-      file,
-      {
-        ios: readSignature(file+'.ios').toLowerCase(),
-        android: readSignature(file+'.android').toLowerCase()
-      }
-    ]);
-    return routes;
-  }, [])
-}
-
 /**
  *  读取文件签名 
  */
@@ -106,11 +87,13 @@ function readSignature(file) {
   const buffer = new Buffer(32);
 
   const count = fs.readSync(fd, buffer, 0, buffer.length, 2);
+  fs.closeSync(fd);
+
   if (count !== 32) {
     console.log(count, buffer.toString())
     throw new Error('read package signature error');
   }
-  fs.closeSync(fd);
+  
   return buffer.toString().toLowerCase();
 
 }
