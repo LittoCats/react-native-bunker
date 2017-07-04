@@ -33,7 +33,7 @@ const config = {};
  */
 const ModuleDefinations = {
   Dependencies: {{Dependencies}},
-  PreLoad: {{Preload}},
+  Preload: {{Preload}},
   Modules: {{Modules}}
 };
 
