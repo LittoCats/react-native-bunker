@@ -60,7 +60,7 @@ if (!__DEV__) {
 生成 AppEntry.js 
 输出文件为 ${projRoot}/node_modules/AppEntry.js
 
-模板参数 $args: [Dependencies Preload Modules BUNKERID, App]
+模板参数 $args: [Dependencies Preload Modules Main BUNKERID, App]
 所有的模块全部为只读
 *******************************************************************************/
 function buildAppEntry() {
@@ -69,9 +69,10 @@ function buildAppEntry() {
 
   class AppEntry {
     constructor() {
-      this.Dependencies = {};
-      this.Preload = {};
-      this.Modules = {};
+      this.Dependencies = '{}';
+      this.Preload = '{}';
+      this.Modules = '{}';
+      this.Main = '{}';
     }
     genBunkerID() {
       this.BunkerID = require('../src/magic');
@@ -122,45 +123,62 @@ function buildAppEntry() {
          */
         return __DEV__ 
          ? `get ${name}(){return Promise.resolve(require('${request}'));}`
-         : `get ${name}(){var module = this._${name} = this._${name} || {name: '${buildModuleID(request)}'};return loadModule(module);}`;
+         : `get ${name}(){var module = this._${name} = this._${name} || {name: '${buildModuleID(request)}', request: '${path.relative(projRoot, request)}'};return loadModuleImpl(module);}`;
       }
+    }
+
+    resolveMainModule() {
+      var name = bunkerConfig.Main;
+      var impl = strictModuleDefination(name).split(/\//g).map(utils.camelcase).join('.')
+      this.Main = `get Main() { return this.Modules.${impl}; }`
+      return this;
     }
 
     export() {
       // 模板参数 $args: [Dependencies Preload Modules BunkerID, App]
       var script = template
-      .replace(/\{\{Dependencies}\}/g, this.Dependencies)
-      .replace(/\{\{Preload}\}/g, this.Preload)
-      .replace(/\{\{Modules}\}/g, this.Modules)
-      .replace(/\{\{BunkerID}\}/g, this.BunkerID)
-      .replace(/\{\{App}\}/g, this.App);
+      .replace(/\{\{Dependencies\}\}/g, this.Dependencies)
+      .replace(/\{\{Preload\}\}/g, this.Preload)
+      .replace(/\{\{Modules\}\}/g, this.Modules)
+      .replace(/\{\{Main\}\}/g, this.Main)
+      .replace(/\{\{BunkerID\}\}/g, this.BunkerID)
+      .replace(/\{\{App\}\}/g, this.App)
+      .replace(/\{\{bunkerConfig\}\}/g, JSON.stringify(bunkerConfig));
 
       fs.writeFileSync(output, script);
     }
   }
 
+  return new AppEntry()
+  .genBunkerID()
+  .loadAppConfig()
+  .buildDependencies()
+  .buildPreload()
+  .buildModules()
+  .resolveMainModule()
+  .export();
+
   function buildModules(list, loadModule) {
     var modules = {};
-    var srcDir = path.resolve(projRoot, bunkerConfig.Source);
+    
     for (var item of list) {
       /**
        *  所有模块的路径都应转换为相对路径
        */
-      item = path.resolve(srcDir, item);
-      item = path.relative(srcDir, item);
+      item = strictModuleDefination(item);
       buildModule(modules, item.split(/\/+/g), loadModule(item));
     }
 
     return pretty(`{${toSource(modules)}}`);
 
-    function toSource(map, indent = 0) {
+    function toSource(map) {
       return Object.keys(map).map(function (key) {
         var value = map[key];
 
         if (typeof value === 'string') {
           return value;
         }else{
-          return `get ${key}(){return {${toSource(value, indent+1)}}}`
+          return `get ${key}(){return {${toSource(value)}}}`
         }
       }).join(',');
     }
@@ -182,9 +200,15 @@ function buildAppEntry() {
     }
   }
 
+  function strictModuleDefination(item) {
+    var srcDir = path.resolve(projRoot, bunkerConfig.Source);
+    item = path.resolve(srcDir, item);
+    item = path.relative(srcDir, item);
+    return item.replace(/[.]{2}/, '$');
+  }
+
   function buildModule(modules, paths, module) {
     for (var path of paths.slice(0, -1)) {
-      if (path === '..') path = '$';
       path = utils.camelcase(path);
       modules = modules[path] = modules[path] || {};
     }
@@ -199,14 +223,6 @@ function buildAppEntry() {
     name = utils.camelcase(name);
     return name;
   }
-
-  new AppEntry()
-  .genBunkerID()
-  .loadAppConfig()
-  .buildDependencies()
-  .buildPreload()
-  .buildModules()
-  .export();
 }
 
 /*******************************************************************************

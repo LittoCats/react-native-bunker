@@ -4,21 +4,31 @@
  *  这是一个模板文件，需要使用 bunker 工具生成目标文件才能使用
  */
 
+const React= require('react');
 const {
   Platform,
   AsyncStorage,
   AppRegistry,
+  StyleSheet,
   View,
-  Alert
+  Text,
+  Alert,
+  ActivityIndicator,
+  NativeEventEmitter
 } = require('react-native');
+
+const ReactMixin = require('react-mixin');
+const Subscribable = require('react-native/Libraries/Components/Subscribable');
 const crypto = require('crypto-js');
+const camelcase = require('camelcase');
+const path = require('react-native-path');
 
 const config = {};
 
 /*******************************************************************************
                                     模块声名
 
-模板参数 $args: [Dependencies Preload Modules BUNKERID, App]
+模板参数 $args: [Dependencies Preload Modules Main BUNKERID, App]
 需要 node 支持模板字符串
 编译该模板的方法为：
   
@@ -34,7 +44,8 @@ const config = {};
 const ModuleDefinations = {
   Dependencies: {{Dependencies}},
   Preload: {{Preload}},
-  Modules: {{Modules}}
+  Modules: {{Modules}},
+  {{Main}}
 };
 
 /**
@@ -48,6 +59,8 @@ const App = {
   ... {{App}}
 };
 
+const projRoot = '/';
+const bunkerConfig = {{bunkerConfig}}
 
 /*******************************************************************************
                                     公共接口
@@ -55,6 +68,7 @@ const App = {
 
 exports.Dependencies = buildDependencies();
 exports.Modules = buildModules();
+exports.Preload = buildPreload();
 exports.App = App;
 exports.config = function (key, value, _public = false) {
   const field = _public ? exports : config;
@@ -62,13 +76,88 @@ exports.config = function (key, value, _public = false) {
   field[key] = value;
 }
 
-exports.loadModule = async function (name) {
-  var module = {name};
-  var script = loadModuleSource(module);
-  compileModule(module, script);
+/*******************************************************************************/
 
-  return module.exports;
+exports.loadModule = loadModule;
+
+/*******************************************************************************/
+
+exports.createAsyncComponent = createAsyncComponent;
+
+/**
+ *  将异步加载的 Component 包装起来
+ *  同一个包装器中，Component 只会被 load 一次
+ */
+function createAsyncComponent(cid) {
+  const EventEmitter = new NativeEventEmitter.__proto__();
+  const uid = `${cid}?${new Date().getTime()}`;
+  var Component = undefined;
+
+  async function loadOriginalComponent() {
+    try {
+      Component = Component || (await loadModule(cid));
+    }catch(e){
+      if (__DEV__) console.warn(e);
+      var error = e;
+    }
+    EventEmitter.emit(uid, error, Component);
+  }
+  
+  class AsyncComponent extends React.Component {
+
+    static get navigationOptions () {
+      return Component.navigationOptions;
+    }
+
+    state = {};
+    
+    componentDidMount() {
+      this.loadOriginalComponent();
+    }
+
+    loadOriginalComponent() {
+      this.addListenerOn(EventEmitter, uid, (error, Component)=>{
+        EventEmitter.removeCurrentListener();
+        this.setState({error, Component});
+      });
+      this.setState({Component: undefined}, loadOriginalComponent);
+    }
+
+    render() {
+      const Component = this.state.Component;
+      return Component ? <Component {...this.props} /> : (
+        <View style={styles.placeholder}>
+          <ActivityIndicator />
+          {
+            !this.state.error ? <Text style={styles.message}>加载中 ...</Text> :
+                <Text style={styles.message}>加载失败，
+                <Text style={styles.retry} onPress={this.loadOriginalComponent}>重试</Text></Text>
+          }
+        </View>
+      );
+    }
+  }
+
+  const styles = StyleSheet.create({
+    placeholder: {
+      ...StyleSheet.absoluteFillObject,
+      justifyContent: 'center',
+      alignItems: 'center'
+    },
+    message: {
+      margin: 13,
+      color: 'gray'
+    },
+    retry: {
+      color: '#1488F5'
+    }
+  });
+
+  ReactMixin(AsyncComponent.prototype, Subscribable.Mixin);
+
+  return AsyncComponent;
 }
+
 
 /**
  *  公共接口加入到全局 module 中
@@ -81,6 +170,11 @@ __d(function (global, require, module) {
 /*******************************************************************************
                                     功能定义
 *******************************************************************************/
+
+function buildPreload() {
+  return ModuleDefinations.Preload;
+}
+
 function buildDependencies() {
   return ModuleDefinations.Dependencies;
 }
@@ -91,7 +185,7 @@ function buildDependencies() {
 function buildModules() {
   var modules = {__proto__: ModuleDefinations.Modules};
 
-  Object.keys(ModuleDefinations.Preload).forrEach(function (key) {
+  Object.keys(ModuleDefinations.Preload).forEach(function (key) {
     Object.defineProperty(modules, key, {
       get: async function() {
         return ModuleDefinations.Preload[key];
@@ -101,10 +195,45 @@ function buildModules() {
   return modules;
 }
 
+async function loadModule(name) {
+  
+  const request = strictModuleDefination(name);
+
+  /**
+   *  首先在 Modules Dependencies 中查找
+   */
+  const indexes = strictQueryPath(name);
+
+  return indexes.reduce(reduce, exports.Modules) || indexes.reduce(reduce, exports.Dependencies) || loadModuleImpl({
+    request: name,
+    name: crypto.MD5(name).toString(crypto.enc.Hex)
+  });
+
+  function reduce(lib, key) {
+    return lib && lib[key];
+  }
+
+  function strictModuleDefination(request) {
+    request = path.resolve(projRoot, bunkerConfig.Source, request);
+    return path.relative(projRoot, request);
+  }
+
+  function strictQueryPath(request) {
+    var srcDir = path.resolve(projRoot, bunkerConfig.Source);
+    request = path.resolve(srcDir, request);
+    request = path.relative(srcDir, request);
+
+    return request.replace(/\.{2}/g, '$').split(/\//g).map(function (request) {
+      return camelcase(request).replace(/^[a-z]/i, function (char) {
+        return char.toUpperCase();
+      })
+    });
+  }
+}
 /**
  *  
  */
-async function loadModule(module) {
+async function loadModuleImpl(module) {
   if (!module.isInitialized) {
     var script = await loadModuleSource(module);
     compileModule(module, script); 
@@ -197,23 +326,25 @@ function compileModule(module, script) {
 *******************************************************************************/
 
 /**
- *  hook AppRegistery.runApplication, 获取启动参数
+ *  hook AppRegistry.runApplication, 获取启动参数
  */
-AppRegistery.runApplication = (function (runApplication) {
-  return function runApplication(appName, params) {
+AppRegistry.runApplication = (function (runApplication) {
+  return function (appName, params) {
     if (App.name === appName) {
       App.params = params;
     }
-    return runApplication.call(AppRegistery, appName, params);
+    return runApplication.call(AppRegistry, appName, params);
   };
-})(AppRegistery.runApplication);
+})(AppRegistry.runApplication);
 
-AppRegistery.registerComponent(App.name, ()=> View);
+AppRegistry.registerComponent(App.name, ()=> View);
 
 /**
  *  加载主模块
+ *  
+ *  如果 App.params 为空，只需要等待 native 调用 runApplication 即可
  */
-require('react-native-bunker').Modules.Main.then(function (module) {
-  AppRegistery.registerComponent(App.name, ()=> module);
-  AppRegistery.runApplication(App.name, App.params);
+ModuleDefinations.Main.then(function (module) {
+  AppRegistry.registerComponent(App.name, ()=> module.__esModule ? module.default : module);
+  if (App.params) AppRegistry.runApplication(App.name, App.params);
 });
