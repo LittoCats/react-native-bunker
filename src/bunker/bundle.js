@@ -21,6 +21,8 @@ var __DEV__, projRoot, outputDir, platforms;
  * 输出文件为 ${projRoot}/node_modules/react-bunker-config 
  */
 function buildConfig() {
+  console.log('Build config ...'.green);
+
   const {bunkerc} = utils;
 
   const source = bunkerc.source;
@@ -49,8 +51,12 @@ function buildConfig() {
   const appBunkerConfig = buildAppBunkerConfig(bundleLoader_declare, module_declare, bundle_declare);
 
   // 输出
-  const output = path.resolve(projRoot, 'node_modules/react-bunker-config.js');
+  const output = path.resolve(__dirname, '../../build/config.js');
+  fse.ensureFileSync(output);
+
   fs.writeFileSync(output, appBunkerConfig);
+
+  console.log('\nDone.'.green);
 }
 
 function buildAppBunkerConfig(loader, modules, bundles) {
@@ -128,7 +134,7 @@ function ModuleDeclareReducer(modules, declare) {
  *
  */
 function buildModuleDeclare([id, aliases], loader, resolve) {
-  const getter = `function() { return ${loader}("${resolve(id)}"); }`;
+  const getter = `async function() { return ${loader}("${resolve(id)}"); }`;
   const alias = JSON.stringify(aliases).slice(1, -1);
   return `${JSON.stringify(id)}: [${alias}${alias.length ? ', ' : ''}${getter}]`
 }
@@ -226,7 +232,7 @@ function bundle() {
       }
 
       function writeFile(script) {
-        const output = path.resolve(outputDir, JSON.stringify(path.relative(srcRoot, declare)).slice(1, -1))+platform+'.js'
+        const output = path.resolve(outputDir, JSON.stringify(path.relative(srcRoot, declare)).slice(1, -1))+'.'+platform+'.js'
         fse.ensureDirSync(path.dirname(output));
         fs.writeFileSync(output, script);
       }

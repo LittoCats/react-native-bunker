@@ -8,7 +8,6 @@
   },
   "bin": "./src/bunker/cli.js",
   "dependencies": {
-    "crypto-js": "latest",
     "js-yaml": "latest",
     "commander": "latest",
     "colors": "latest",

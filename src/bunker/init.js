@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const {projRoot} = require('./utils');
+const utils = require('./utils');
+const {projRoot} = utils;
 
 exports.run = run;
 
@@ -21,7 +22,11 @@ function fillPackageScript() {
 
 function linkEntry() {
   var entry = `require("${path.resolve(__dirname, '../entry.js')}")`;
-  fs.writeFileSync(path.resolve(projRoot, 'node_modules/react-bunker-entry.js'), entry);
+  var app = require(path.resolve(projRoot, 'app.json'));
+  
+  var entryFile = utils.camelcase(`${app.name}`);
+
+  fs.writeFileSync(path.resolve(projRoot, `node_modules/${entryFile}Entry.js`), entry);
 }
 
 function createBunkerConfigure() {

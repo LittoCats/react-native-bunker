@@ -3,8 +3,8 @@
  */
 !function (symbol) {
   if (typeof global[symbol] !== 'undefined') throw new Error('react-native-entry should just imported once by main bundle.');
-  global[symbol] = createBunker(require('react-bunker-config'));
-}(require('react-bunker/src/symbol'));
+  global[symbol] = createBunker(require('../build/config'));
+}(require('./symbol'));
 
 /*******************************************************************************
                               类型声明
@@ -27,7 +27,7 @@ type BundleLoader = Object<{loadBundleScript: loadBundleScript}>;
  *  {getBundleLoader: ()=> BundleLoader, getModuleDefinations: ()=> Object, getBundleDefinations: (loadBundle: (declare: string)=> any)=> Object}
  */
 function createBunker({getBundleLoader, getModuleDefinations, getBundleDefinations}) {
-  console.log('createBunker')
+  
   const Modules = buildModuleGenerator(getModuleDefinations());
   const Bundles = buildModuleGenerator(getBundleDefinations(async function (declare) {
     return loadBundle(declare, getBundleLoader().loadBundleScript);

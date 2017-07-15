@@ -12,15 +12,17 @@ npm install -s react-native-bunker
 
 * step 1
 
-  Init bunker.yaml
+  Init .bunkerc
 
   ```
-  ./node_modules/react-native-bunker/bin/init
+  ./node_modules/.bin/react-native-bunker init
   ```
+
+  This step maybe executed automically when install.
 
 * step 2
 
-  [setup bunker.yaml](./defaults/bunker.yaml)
+  [setup .bunkerc](./src/bunker.yaml)
 
 * step 3
 
@@ -55,7 +57,7 @@ npm install -s react-native-bunker
       ...
     }
     ...
-  } = Bunker.InternalModules;
+  } = Bunker.Modules;
   ```
 
 * step 4
@@ -73,7 +75,7 @@ npm install -s react-native-bunker
   Bundle your app packages
 
   ```
-  ./node_modules/react-native-bunker/bin/bundle
+  ./node_modules/.bin/react-native-bunker bundle
   ```
 
 #### Then `Command + R` to reload your app.
