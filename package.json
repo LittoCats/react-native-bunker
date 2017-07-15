@@ -1,0 +1,26 @@
+{
+  "name": "react-native-bunker",
+  "version": "0.0.1",
+  "description": "Bundle React Project with several packages.",
+  "main": "index.js",
+  "scripts": {
+    "install": "./src/bunker/cli.js init"
+  },
+  "bin": "./src/bunker/cli.js",
+  "dependencies": {
+    "crypto-js": "latest",
+    "js-yaml": "latest",
+    "commander": "latest",
+    "colors": "latest",
+    "fs-extra": "latest"
+  },
+  "keywords": [
+    "bunker",
+    "react",
+    "native",
+    "bundle",
+    "package"
+  ],
+  "author": "程巍巍",
+  "license": "Apache-2.0"
+}

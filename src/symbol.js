@@ -1,0 +1,1 @@
+module.exports = Symbol.for('react-native-bunker-symbol');

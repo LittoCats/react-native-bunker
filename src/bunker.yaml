@@ -1,0 +1,52 @@
+# 项目需要找包的资源文件根目录
+# 所有需要打包的资源文件必须在该目录下
+# 
+# source 是相对于项目根路径的 相对路径
+# 
+source:
+
+# PackageLoader 模块用于管理 package 资源
+# 必需实现以下几个方法
+# 
+# loadBunkerScript: (declare[, md5])=> Promise<{script, md5}>
+# 
+bundle-loader:
+
+# modules 包含所有预加载的模块
+# 
+# 项目中 package.json 定义的依赖会作为静态加载的模块自动包含在 modules 中
+# 
+# 访问：
+#   React = Bunker.Modules.React;
+#   React = Bunker.module('react');
+# 
+# - react         => Bunker.Modules.React
+# - react-native: RactNative   => Bunker.Modules.RactNative
+# 
+# 第二种声名方法，主要用于导入一些包的非 public 模块
+# 
+# - react-native/Libraries/EventEmitter: EventEmitter
+modules:
+
+# bundles 定义需要打包为独立 bundle 的模块集合
+# 
+# 访问：
+#   someModule = await Bunker.Packages.SomModule;
+#   someModule = await Bunker.bundle('some-module');
+# 
+# 
+# 所有模块的资源不应出现嵌套的情况
+# 
+# - some-module
+# - some-module/sub-module
+# 
+# 对于嵌套的包，只能通过 bundle 方法加载，或者设置别名
+# 
+# 声名时，可以使用的 flag:
+# 
+# <<: 每次调用时，如果 script 发生了变化，则重新加载
+#     这一类 bundle 只能通过 Bunker.bundle 方法访问
+#     
+# 所有声明，必须是相对于 source 的相对路径
+bundles:
+  
