@@ -3,7 +3,7 @@
  */
 !function (symbol) {
   if (typeof global[symbol] !== 'undefined') throw new Error('react-native-entry should just imported once by main bundle.');
-  global[symbol] = createBunker(require('../build/config'));
+  global[symbol] = createBunker(require('react-native-bunker-config'));
 }(require('./symbol'));
 
 /*******************************************************************************

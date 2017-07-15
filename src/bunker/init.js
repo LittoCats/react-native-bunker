@@ -15,7 +15,7 @@ function fillPackageScript() {
   var src = path.resolve(projRoot, 'package.json');
   var pj = require(src);
 
-  pj.scripts.bunker = 'node node_modules/react-bunker/src/bunker/cli.js bundle'
+  pj.scripts.bunker = './node_modules/.bin/react-native-bunker bundle'
 
   fs.writeFileSync(src, JSON.stringify(pj, null, 2));
 }

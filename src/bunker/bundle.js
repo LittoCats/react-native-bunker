@@ -51,7 +51,7 @@ function buildConfig() {
   const appBunkerConfig = buildAppBunkerConfig(bundleLoader_declare, module_declare, bundle_declare);
 
   // 输出
-  const output = path.resolve(__dirname, '../../build/config.js');
+  const output = path.resolve(projRoot, 'node_modules', 'react-native-bunker-config.js');
   fse.ensureFileSync(output);
 
   fs.writeFileSync(output, appBunkerConfig);
