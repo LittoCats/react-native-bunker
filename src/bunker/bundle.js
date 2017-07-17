@@ -134,7 +134,7 @@ function ModuleDeclareReducer(modules, declare) {
  *
  */
 function buildModuleDeclare([id, aliases], loader, resolve) {
-  const getter = `async function() { return ${loader}("${resolve(id)}"); }`;
+  const getter = `function() { return ${loader}("${resolve(id)}"); }`;
   const alias = JSON.stringify(aliases).slice(1, -1);
   return `${JSON.stringify(id)}: [${alias}${alias.length ? ', ' : ''}${getter}]`
 }
