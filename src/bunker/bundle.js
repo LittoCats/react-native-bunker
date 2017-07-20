@@ -175,8 +175,17 @@ function resolveModuleEntryFile(request, projRoot, source) {
   throw new Error(`Can't find module ${request}`);
 
   function findPath() {
-    var filename = Module._resolveFilename(path.resolve.apply(null, arguments));
-    if (filename.slice(0, projRoot.length) === projRoot) return filename;
+    var req = path.resolve.apply(null, arguments);
+    try {
+      var filename = Module._resolveFilename(req);
+      if (filename.slice(0, projRoot.length) === projRoot) return filename;  
+    }catch(e) {
+      /**
+       *  如果存在 package.json 则直接返回
+       */
+      fs.accessSync(path.resolve(req, 'package.json'), fs.constants.F_OK);
+      return req;
+    }
   }
 }
 
