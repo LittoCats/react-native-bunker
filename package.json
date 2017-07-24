@@ -1,6 +1,6 @@
 {
   "name": "react-native-bunker",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Bundle React Project with several packages.",
   "main": "index.js",
   "scripts": {
